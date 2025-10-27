@@ -186,7 +186,6 @@ def test_basic(
 
 def test_bed_and_breakfast_zero_available_quantity_skip() -> None:
     """Later acquisitions are ignored if the disposal was already satisfied."""
-
     currency_converter = CurrencyConverter(None, {})
     price_fetcher = CurrentPriceFetcher(currency_converter, {}, {})
     calculator = CapitalGainsCalculator(
@@ -273,6 +272,92 @@ def test_bed_and_breakfast_zero_available_quantity_skip() -> None:
 
     second_match = datetime.date(2024, 3, 10)
     assert symbol not in calculator.bnb_list.get(second_match, {})
+
+
+def test_bed_and_breakfast_rounding_residue() -> None:
+    """Bed and breakfasting tolerates microscopic rounding residue."""
+    currency_converter = CurrencyConverter(None, {})
+    price_fetcher = CurrentPriceFetcher(currency_converter, {}, {})
+    calculator = CapitalGainsCalculator(
+        2024,
+        currency_converter,
+        IsinConverter(),
+        price_fetcher,
+        SpinOffHandler(),
+        InitialPrices(),
+        interest_fund_tickers=[],
+    )
+
+    symbol = "TEST"
+    transactions: list[BrokerTransaction] = [
+        BrokerTransaction(
+            date=datetime.date(2024, 1, 1),
+            action=ActionType.TRANSFER,
+            symbol=None,
+            description="deposit",
+            quantity=None,
+            price=None,
+            fees=Decimal(0),
+            amount=Decimal(100),
+            currency="GBP",
+            broker="Test",
+        ),
+        BrokerTransaction(
+            date=datetime.date(2024, 1, 2),
+            action=ActionType.BUY,
+            symbol=symbol,
+            description="initial buy",
+            quantity=Decimal(3),
+            price=Decimal("3.333333333333333333333333333"),
+            fees=Decimal(0),
+            amount=Decimal(-10),
+            currency="GBP",
+            broker="Test",
+        ),
+        BrokerTransaction(
+            date=datetime.date(2024, 3, 1),
+            action=ActionType.SELL,
+            symbol=symbol,
+            description="disposal",
+            quantity=Decimal(3),
+            price=Decimal(5),
+            fees=Decimal(0),
+            amount=Decimal(15),
+            currency="GBP",
+            broker="Test",
+        ),
+        BrokerTransaction(
+            date=datetime.date(2024, 3, 15),
+            action=ActionType.BUY,
+            symbol=symbol,
+            description="bed and breakfast buy",
+            quantity=Decimal(3),
+            price=Decimal(4),
+            fees=Decimal(0),
+            amount=Decimal(-12),
+            currency="GBP",
+            broker="Test",
+        ),
+    ]
+
+    report = get_report(calculator, transactions)
+
+    assert report.total_gain() == Decimal(0)
+
+    match_date = datetime.date(2024, 3, 15)
+    bnb_entry = calculator.bnb_list[match_date][symbol]
+    assert bnb_entry.quantity == Decimal(3)
+
+    expected_amount = Decimal(10)
+    residue = expected_amount - bnb_entry.amount
+
+    # With the previous exact-equality assertion this scenario raised, so
+    # ensure the residual is tiny but non-zero.
+    assert residue != Decimal(0)
+    assert abs(residue) < Decimal("1E-20")
+
+    # The portfolio still reports the correct pool amount (no visible drift).
+    assert calculator.portfolio[symbol].amount == Decimal(10)
 
 
 def test_run_with_example_files() -> None:
