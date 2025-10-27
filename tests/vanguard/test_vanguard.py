@@ -73,6 +73,29 @@ def test_read_vanguard_transactions_buy(tmp_path: Path) -> None:
     assert transaction.currency == "GBP"
 
 
+def test_read_vanguard_transactions_buy_without_ticker(tmp_path: Path) -> None:
+    """Fund names without tickers should be accepted."""
+
+    vanguard_file = tmp_path / "buy_without_ticker.csv"
+    rows = [
+        COLUMNS,
+        [
+            "05/04/2024",
+            "Bought 12.3456 Global Equity Index Fund - Accumulation",
+            "-1234.56",
+            "10000.00",
+        ],
+    ]
+    _write_csv(vanguard_file, rows)
+
+    [transaction] = read_vanguard_transactions(vanguard_file)
+
+    assert transaction.action is ActionType.BUY
+    assert transaction.symbol == "Global Equity Index Fund - Accumulation"
+    assert transaction.quantity == Decimal("12.3456")
+    assert transaction.price == Decimal("100")
+
+
 def test_read_vanguard_transactions_invalid_decimal(tmp_path: Path) -> None:
     """Raise ParsingError when amount cannot be parsed as Decimal."""
 
@@ -116,6 +139,37 @@ def test_read_vanguard_transactions_invalid_header(tmp_path: Path) -> None:
     assert "Expected column 3 to be 'Amount' but found 'Unexpected'" in str(exc.value)
 
 
+def test_read_vanguard_transactions_transfer_variants(tmp_path: Path) -> None:
+    """Multiple textual variants should be classified as transfers."""
+
+    scenarios = [
+        "Account fee charged",
+        "Account Fee for the period 02-Apr-2024 to 01-Jul-2024",
+        "Cash transfer from VG0000000-001 to VG0000000-002",
+        "ETF dealing fee (buy) Vanguard Funds PLC VANGUARD S&P 500 UCITS ETF",
+        "Selling of account investments for payment of Fees",
+        "Funds transferred from VG0000000-002",
+    ]
+
+    rows = [COLUMNS]
+    for index, details in enumerate(scenarios, start=1):
+        rows.append(
+            [
+                f"0{index}/01/2024",
+                details,
+                "-10.00",
+                "100.00",
+            ]
+        )
+
+    vanguard_file = tmp_path / "transfers.csv"
+    _write_csv(vanguard_file, rows)
+
+    transactions = read_vanguard_transactions(vanguard_file)
+
+    assert all(transaction.action is ActionType.TRANSFER for transaction in transactions)
+
+
 def test_read_vanguard_transactions_empty_file(tmp_path: Path) -> None:
     """Raise ParsingError when file has no content."""
 
@@ -126,3 +180,30 @@ def test_read_vanguard_transactions_empty_file(tmp_path: Path) -> None:
         read_vanguard_transactions(vanguard_file)
 
     assert "Vanguard CSV file is empty" in str(exc.value)
+
+
+def test_read_vanguard_transactions_preserves_same_day_order(tmp_path: Path) -> None:
+    """Transactions occurring on the same day should keep original ordering."""
+
+    vanguard_file = tmp_path / "same_day.csv"
+    rows = [
+        COLUMNS,
+        [
+            "12/12/2024",
+            "Bought 100 Foo Fund - Accumulation",
+            "-10000.00",
+            "10000.00",
+        ],
+        [
+            "12/12/2024",
+            "Sold 100 Foo Fund - Accumulation",
+            "9800.00",
+            "200.00",
+        ],
+    ]
+    _write_csv(vanguard_file, rows)
+
+    transactions = read_vanguard_transactions(vanguard_file)
+
+    actions = [transaction.action for transaction in transactions]
+    assert actions == [ActionType.BUY, ActionType.SELL]
